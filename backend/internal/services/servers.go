@@ -182,19 +182,19 @@ func serverPasswordHash(isPublic bool, password string) (*string, error) {
 }
 
 // UpdateServer atualiza o nome, o ícone, a visibilidade e a senha do
-// servidor. Quando icon e iconFormat são vazios, o ícone é removido (blob
-// NULL e ”). public nil mantém a visibilidade atual; quando o estado final
-// é privado (public=false), password não pode ser vazio.
+// servidor. Campos opcionais ausentes preservam o estado atual. icon vazio
+// remove o ícone; icon não vazio exige iconFormat. public nil mantém a
+// visibilidade; password nil mantém a senha quando o servidor já é privado.
+// Ao tornar um servidor público, o hash da senha é removido.
 // Retorna ErrServerNotFound quando o servidor não existe, ErrInvalidInput
-// quando o nome está vazio ou acima de 32 caracteres, quando o ícone não é
-// um GIF, JPEG, PNG ou WEBP válido de até 2MB com dimensões de até 512px ou
-// quando o servidor privado não tem senha.
-func UpdateServer(ctx context.Context, actorID, name, icon, iconFormat string, public *bool, password *string) error {
+// quando o nome está vazio ou acima de 32 caracteres, quando o ícone é
+// inválido ou quando o estado final privado não possui senha.
+func UpdateServer(ctx context.Context, actorID, name string, icon, iconFormat *string, public *bool, password *string) error {
 	if name == "" || utf8.RuneCountInString(name) > maxServerNameLength {
 		return ErrInvalidInput
 	}
 
-	current, err := storage.GetServer(ctx)
+	current, err := storage.GetServerWithPasswordHash(ctx)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return ErrServerNotFound
@@ -202,22 +202,34 @@ func UpdateServer(ctx context.Context, actorID, name, icon, iconFormat string, p
 		return err
 	}
 
-	var iconMedia *string
-	if icon != "" || iconFormat != "" {
-		decoded, err := base64.StdEncoding.DecodeString(icon)
+	iconMedia := current.IconMedia
+	switch {
+	case icon == nil && iconFormat == nil:
+		// Campos ausentes preservam o ícone atual.
+	case icon == nil:
+		return ErrInvalidInput
+	case *icon == "":
+		if iconFormat != nil && *iconFormat != "" {
+			return ErrInvalidInput
+		}
+		iconMedia = nil
+	default:
+		if iconFormat == nil || *iconFormat == "" {
+			return ErrInvalidInput
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(*icon)
 		if err != nil {
 			return ErrInvalidInput
 		}
 
-		format := normalizeImageFormat(iconFormat)
+		format := normalizeImageFormat(*iconFormat)
 		if !avatarContentMatchesFormat(decoded, format) {
 			return ErrInvalidInput
 		}
-
 		if len(decoded) > maxIconBytes {
 			return ErrInvalidInput
 		}
-
 		if err := utils.ValidateImage(decoded, utils.MaxImageDimension); err != nil {
 			return ErrInvalidInput
 		}
@@ -234,28 +246,24 @@ func UpdateServer(ctx context.Context, actorID, name, icon, iconFormat string, p
 		isPublic = *public
 	}
 
-	//se o servidor não for publico e a senha não for em branco, grava os dados inteiros no banco
-	//se o servidor for publico ou a senha estiver em branco, não grava senha e deixa o servidor público
-	if isPublic == false && password != nil {
-		passwordHash, err := serverPasswordHash(isPublic, *password)
+	passwordHash := current.PasswordHash
+	if isPublic {
+		passwordHash = nil
+	} else if password != nil {
+		passwordHash, err = serverPasswordHash(false, *password)
 		if err != nil {
 			return err
 		}
-		if _, err := storage.UpdateServer(ctx, current.ID, models.Server{
-			Name:         name,
-			IconMedia:    iconMedia,
-			PublicServer: isPublic,
-		}, passwordHash); err != nil {
-			return fmt.Errorf("falha ao atualizar o servidor: %w", err)
-		}
-	} else {
-		if _, err := storage.UpdateServer(ctx, current.ID, models.Server{
-			Name:         name,
-			IconMedia:    iconMedia,
-			PublicServer: true,
-		}, nil); err != nil {
-			return fmt.Errorf("falha ao atualizar o servidor: %w", err)
-		}
+	} else if passwordHash == nil {
+		return ErrInvalidInput
+	}
+
+	if _, err := storage.UpdateServer(ctx, current.ID, models.Server{
+		Name:         name,
+		IconMedia:    iconMedia,
+		PublicServer: isPublic,
+	}, passwordHash); err != nil {
+		return fmt.Errorf("falha ao atualizar o servidor: %w", err)
 	}
 
 	RecordAudit(ctx, AuditEntry{

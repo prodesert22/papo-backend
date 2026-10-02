@@ -127,8 +127,8 @@ func CreateServerHandler(baseURL string, c echo.Context) error {
 
 type updateServerRequest struct {
 	Name       string  `json:"name"`
-	IconBlob   string  `json:"icon_blob"`
-	IconFormat string  `json:"icon_format"`
+	IconBlob   *string `json:"icon_blob"`
+	IconFormat *string `json:"icon_format"`
 	Password   *string `json:"password"`
 	Public     *bool   `json:"public"`
 }

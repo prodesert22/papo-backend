@@ -2862,7 +2862,10 @@ func TestUpdateServerPreservesPrivateStateAndPasswordWhenOmitted(t *testing.T) {
 	if after.PublicServer {
 		t.Error("servidor privado foi alterado para público")
 	}
-	if after.PasswordHash == nil || *after.PasswordHash != *before.PasswordHash {
+	if after.PasswordHash == nil {
+		t.Fatal("password_hash foi removido durante a atualização")
+	}
+	if *after.PasswordHash != *before.PasswordHash {
 		t.Errorf("password_hash não foi preservado: antes=%v depois=%v", before.PasswordHash, after.PasswordHash)
 	}
 	if err := utils.CheckPassword(password, *after.PasswordHash); err != nil {

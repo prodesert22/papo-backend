@@ -489,7 +489,7 @@ func TestUpdateServerPasswordPolicy(t *testing.T) {
 	for _, tc := range passwordPolicyCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			pw := tc.password
-			err := UpdateServer(testCtx(), owner.ID, newRandomServerName(), "", "", &pub, &pw)
+			err := UpdateServer(testCtx(), owner.ID, newRandomServerName(), nil, nil, &pub, &pw)
 			if !errors.Is(err, tc.wantErr) {
 				t.Errorf("esperava %v, obtive %v", tc.wantErr, err)
 			}
@@ -2662,6 +2662,10 @@ func TestGetServerNoServer(t *testing.T) {
 	}
 }
 
+func stringPtr(value string) *string {
+	return &value
+}
+
 // --- UpdateServer ---
 
 func TestUpdateServer(t *testing.T) {
@@ -2674,7 +2678,7 @@ func TestUpdateServer(t *testing.T) {
 	newName := newRandomServerName()
 	icon := base64.StdEncoding.EncodeToString(pngAvatarBytes(100, 100))
 
-	if err := UpdateServer(testCtx(), testActorID(), newName, icon, "png", nil, nil); err != nil {
+	if err := UpdateServer(testCtx(), testActorID(), newName, stringPtr(icon), stringPtr("png"), nil, nil); err != nil {
 		t.Fatalf("UpdateServer retornou erro: %v", err)
 	}
 
@@ -2722,7 +2726,7 @@ func TestUpdateServerAllFormats(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			icon := base64.StdEncoding.EncodeToString(tc.icon)
-			if err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), icon, tc.format, nil, nil); err != nil {
+			if err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), stringPtr(icon), stringPtr(tc.format), nil, nil); err != nil {
 				t.Fatalf("UpdateServer retornou erro: %v", err)
 			}
 
@@ -2756,12 +2760,12 @@ func TestUpdateServerRemovesIconWhenEmpty(t *testing.T) {
 
 	// define um ícone inicialmente
 	icon := base64.StdEncoding.EncodeToString(pngAvatarBytes(100, 100))
-	if err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), icon, "PNG", nil, nil); err != nil {
+	if err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), stringPtr(icon), stringPtr("PNG"), nil, nil); err != nil {
 		t.Fatalf("falha ao definir ícone inicial: %v", err)
 	}
 
 	// ícone e formato vazios devem remover o ícone
-	if err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), "", "", nil, nil); err != nil {
+	if err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), stringPtr(""), stringPtr(""), nil, nil); err != nil {
 		t.Fatalf("UpdateServer (remoção) retornou erro: %v", err)
 	}
 
@@ -2781,6 +2785,109 @@ func TestUpdateServerRemovesIconWhenEmpty(t *testing.T) {
 	}
 	if summary.IconFormat != "" {
 		t.Errorf("esperava icon_format vazio, obtive %q", summary.IconFormat)
+	}
+}
+
+func TestUpdateServerPreservesIconWhenOmitted(t *testing.T) {
+	cleanServers(testCtx())
+	_, err := CreateServer(testCtx(), newRandomServerName(), nil)
+	if err != nil {
+		t.Fatalf("falha ao criar servidor: %v", err)
+	}
+
+	iconBytes := pngAvatarBytes(100, 100)
+	icon := base64.StdEncoding.EncodeToString(iconBytes)
+	if err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), stringPtr(icon), stringPtr("PNG"), nil, nil); err != nil {
+		t.Fatalf("falha ao definir ícone inicial: %v", err)
+	}
+
+	before, err := storage.GetServer(testCtx())
+	if err != nil {
+		t.Fatalf("GetServer retornou erro: %v", err)
+	}
+	if before.IconMedia == nil {
+		t.Fatal("esperava icon_media definida antes da atualização")
+	}
+	iconMedia := *before.IconMedia
+
+	newName := newRandomServerName()
+	if err := UpdateServer(testCtx(), testActorID(), newName, nil, nil, nil, nil); err != nil {
+		t.Fatalf("UpdateServer sem campos de ícone retornou erro: %v", err)
+	}
+
+	after, err := storage.GetServer(testCtx())
+	if err != nil {
+		t.Fatalf("GetServer retornou erro: %v", err)
+	}
+	if after.IconMedia == nil || *after.IconMedia != iconMedia {
+		t.Errorf("ícone foi alterado ao omitir icon_blob: antes=%q depois=%v", iconMedia, after.IconMedia)
+	}
+
+	summary, err := GetServer(testCtx())
+	if err != nil {
+		t.Fatalf("GetServer retornou erro: %v", err)
+	}
+	if !bytes.Equal(summary.IconBlob, iconBytes) {
+		t.Errorf("icon_blob não foi preservado: got %x want %x", summary.IconBlob, iconBytes)
+	}
+	if summary.IconFormat != "PNG" {
+		t.Errorf("esperava icon_format PNG, obtive %q", summary.IconFormat)
+	}
+}
+
+func TestUpdateServerPreservesPrivateStateAndPasswordWhenOmitted(t *testing.T) {
+	cleanServers(testCtx())
+	password := newRandomPassword()
+	if _, err := CreateServerWithIcon(testCtx(), newRandomServerName(), "", "", false, &password, nil); err != nil {
+		t.Fatalf("falha ao criar servidor privado: %v", err)
+	}
+
+	before, err := storage.GetServerWithPasswordHash(testCtx())
+	if err != nil {
+		t.Fatalf("GetServerWithPasswordHash retornou erro: %v", err)
+	}
+	if before.PasswordHash == nil {
+		t.Fatal("esperava password_hash definido antes da atualização")
+	}
+
+	newName := newRandomServerName()
+	if err := UpdateServer(testCtx(), testActorID(), newName, nil, nil, nil, nil); err != nil {
+		t.Fatalf("UpdateServer sem public/password retornou erro: %v", err)
+	}
+
+	after, err := storage.GetServerWithPasswordHash(testCtx())
+	if err != nil {
+		t.Fatalf("GetServerWithPasswordHash retornou erro: %v", err)
+	}
+	if after.PublicServer {
+		t.Error("servidor privado foi alterado para público")
+	}
+	if after.PasswordHash == nil || *after.PasswordHash != *before.PasswordHash {
+		t.Errorf("password_hash não foi preservado: antes=%v depois=%v", before.PasswordHash, after.PasswordHash)
+	}
+	if err := utils.CheckPassword(password, *after.PasswordHash); err != nil {
+		t.Errorf("senha original deixou de ser válida: %v", err)
+	}
+}
+
+func TestUpdateServerPrivateTransitionRequiresPassword(t *testing.T) {
+	cleanServers(testCtx())
+	if _, err := CreateServer(testCtx(), newRandomServerName(), nil); err != nil {
+		t.Fatalf("falha ao criar servidor: %v", err)
+	}
+
+	private := false
+	err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), nil, nil, &private, nil)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("esperava ErrInvalidInput ao tornar privado sem senha, obtive %v", err)
+	}
+
+	stored, err := storage.GetServer(testCtx())
+	if err != nil {
+		t.Fatalf("GetServer retornou erro: %v", err)
+	}
+	if !stored.PublicServer {
+		t.Error("servidor público foi alterado apesar da senha ausente")
 	}
 }
 
@@ -2810,7 +2917,7 @@ func TestUpdateServerInvalidInput(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := UpdateServer(testCtx(), testActorID(), tc.serverName, tc.icon, tc.iconFormat, nil, nil)
+			err := UpdateServer(testCtx(), testActorID(), tc.serverName, stringPtr(tc.icon), stringPtr(tc.iconFormat), nil, nil)
 			if !errors.Is(err, ErrInvalidInput) {
 				t.Errorf("esperava ErrInvalidInput, obtive %v", err)
 			}
@@ -2842,7 +2949,7 @@ func TestUpdateServerBoundaryNameLength(t *testing.T) {
 
 	// 32 caracteres multibyte (64 bytes) estão dentro do limite
 	name := strings.Repeat("ç", 32)
-	if err := UpdateServer(testCtx(), testActorID(), name, "", "", nil, nil); err != nil {
+	if err := UpdateServer(testCtx(), testActorID(), name, nil, nil, nil, nil); err != nil {
 		t.Fatalf("UpdateServer com nome de 32 caracteres retornou erro: %v", err)
 	}
 
@@ -2867,7 +2974,7 @@ func TestUpdateServerExceedsMaxSize(t *testing.T) {
 	copy(oversized, pngAvatarBytes(100, 100))
 	icon := base64.StdEncoding.EncodeToString(oversized)
 
-	err = UpdateServer(testCtx(), testActorID(), newRandomServerName(), icon, "PNG", nil, nil)
+	err = UpdateServer(testCtx(), testActorID(), newRandomServerName(), stringPtr(icon), stringPtr("PNG"), nil, nil)
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("esperava ErrInvalidInput para ícone acima de 2MB, obtive %v", err)
 	}
@@ -2885,7 +2992,7 @@ func TestUpdateServerBoundarySize(t *testing.T) {
 	copy(exact, pngAvatarBytes(100, 100))
 	icon := base64.StdEncoding.EncodeToString(exact)
 
-	if err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), icon, "PNG", nil, nil); err != nil {
+	if err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), stringPtr(icon), stringPtr("PNG"), nil, nil); err != nil {
 		t.Fatalf("UpdateServer com ícone de exatamente 2MB retornou erro: %v", err)
 	}
 
@@ -2908,7 +3015,7 @@ func TestUpdateServerBoundarySize(t *testing.T) {
 func TestUpdateServerNoServer(t *testing.T) {
 	cleanServers(testCtx())
 	icon := base64.StdEncoding.EncodeToString(pngAvatarBytes(100, 100))
-	err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), icon, "PNG", nil, nil)
+	err := UpdateServer(testCtx(), testActorID(), newRandomServerName(), stringPtr(icon), stringPtr("PNG"), nil, nil)
 	if !errors.Is(err, ErrServerNotFound) {
 		t.Errorf("esperava ErrServerNotFound sem servidor criado, obtive %v", err)
 	}

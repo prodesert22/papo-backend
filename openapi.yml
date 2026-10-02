@@ -2872,13 +2872,14 @@ components:
         icon_blob:
           type: string
           format: byte
-          description: Ícone em base64 (GIF/JPEG/JPG/PNG/WEBP, máx. 2MB, 512px); vazio remove o ícone
+          description: Ícone em base64 (GIF/JPEG/JPG/PNG/WEBP, máx. 2MB, 512px); ausente mantém o ícone atual; vazio remove o ícone
         icon_format:
           type: string
           enum: [GIF, JPEG, JPG, PNG, WEBP]
+          description: Formato do ícone; obrigatório quando icon_blob contém uma nova imagem
         password:
           type: string
-          description: Senha do servidor precisa ter no mínimo 8 caracteres, 1 letra maíscula + 1 caractere especial; obrigatória quando o servidor ficar privado (public=false)
+          description: Senha do servidor precisa ter no mínimo 8 caracteres, 1 letra maíscula + 1 caractere especial; ausente mantém a senha atual de um servidor já privado; obrigatória ao tornar um servidor público em privado
         public:
           type: boolean
           description: Servidor público; ausente mantém a visibilidade atual

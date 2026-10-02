@@ -1481,6 +1481,25 @@ func TestUpdateServerRouteWithAuth(t *testing.T) {
 	userID, token := registerAndLogin(t, e)
 
 	server := createServerFor(t, userID)
+	iconBytes := pngAvatarBytes(100, 100)
+	iconBody, _ := json.Marshal(map[string]string{
+		"name":        server.Name,
+		"icon_blob":   base64.StdEncoding.EncodeToString(iconBytes),
+		"icon_format": "PNG",
+	})
+	iconRec := do(t, e, http.MethodPut, "/server", iconBody, authCookie(token))
+	if iconRec.Code != http.StatusOK {
+		t.Fatalf("falha ao definir ícone inicial: status %d (corpo: %s)", iconRec.Code, iconRec.Body.String())
+	}
+
+	withIcon, err := storage.GetServer(context.Background())
+	if err != nil {
+		t.Fatalf("GetServer retornou erro: %v", err)
+	}
+	if withIcon.IconMedia == nil {
+		t.Fatal("esperava icon_media definida antes de renomear")
+	}
+	iconMedia := *withIcon.IconMedia
 
 	newName := "srv_" + randHex(4)
 	body, _ := json.Marshal(map[string]string{"name": newName})
@@ -1490,8 +1509,11 @@ func TestUpdateServerRouteWithAuth(t *testing.T) {
 		t.Fatalf("esperava status 200, obtive %d (corpo: %s)", rec.Code, rec.Body.String())
 	}
 	var resp struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		IconBlob   []byte `json:"icon_blob"`
+		IconFormat string `json:"icon_format"`
+		Public     bool   `json:"public"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("falha ao decodificar resposta: %v", err)
@@ -1502,6 +1524,15 @@ func TestUpdateServerRouteWithAuth(t *testing.T) {
 	if resp.Name != newName {
 		t.Errorf("esperava name %q, obtive %q", newName, resp.Name)
 	}
+	if !bytes.Equal(resp.IconBlob, iconBytes) {
+		t.Errorf("icon_blob foi perdido ao renomear: got %x want %x", resp.IconBlob, iconBytes)
+	}
+	if resp.IconFormat != "PNG" {
+		t.Errorf("esperava icon_format PNG, obtive %q", resp.IconFormat)
+	}
+	if !resp.Public {
+		t.Error("servidor público mudou de visibilidade ao renomear")
+	}
 
 	stored, err := storage.GetServer(context.Background())
 	if err != nil {
@@ -1509,6 +1540,9 @@ func TestUpdateServerRouteWithAuth(t *testing.T) {
 	}
 	if stored.Name != newName {
 		t.Errorf("esperava name %q persistido, obtive %q", newName, stored.Name)
+	}
+	if stored.IconMedia == nil || *stored.IconMedia != iconMedia {
+		t.Errorf("icon_media foi alterada ao renomear: antes=%q depois=%v", iconMedia, stored.IconMedia)
 	}
 }
 
